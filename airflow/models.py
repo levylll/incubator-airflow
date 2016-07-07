@@ -54,6 +54,7 @@ from sqlalchemy.orm import relationship, synonym
 
 from croniter import croniter
 import six
+from airflow.contrib.notify.notbot import send_msg
 
 from airflow import settings, utils
 from airflow.executors import DEFAULT_EXECUTOR, LocalExecutor
@@ -1399,6 +1400,8 @@ class TaskInstance(Base):
                     logging.info('Marking task as FAILED.')
                 if task.email_on_failure and task.email:
                     self.email_alert(error, is_retry=False)
+                elif task.msg_on_failure and task.to:
+                    self.msg_alert(error, is_retry=False)
         except Exception as e2:
             logging.error(
                 'Failed to send email to: ' + str(task.email))
@@ -1538,6 +1541,21 @@ class TaskInstance(Base):
             "Mark success: <a href='{self.mark_success_url}'>Link</a><br>"
         ).format(**locals())
         send_email(task.email, title, body)
+
+    def msg_alert(self, exception, is_retry=False):
+        task = self.task
+        title = "Airflow alert: {self}".format(**locals())
+        exception = str(exception).replace('\n', '<br>')
+        try_ = task.retries + 1
+        body = '''
+        Try {self.try_number} out of {try_}
+        Exception:{exception}
+        Log: {self.log_url}
+        Host: {self.hostname}
+        Log file: {self.log_filepath}
+        Mark success: {self.mark_success_url}
+        '''.format(**locals())
+        send_msg(task.to, title, body)
 
     def set_duration(self):
         if self.end_date and self.start_date:
@@ -1804,8 +1822,10 @@ class BaseOperator(object):
             task_id,
             owner=configuration.get('operators', 'DEFAULT_OWNER'),
             email=None,
+            to=None,
             email_on_retry=True,
             email_on_failure=True,
+            msg_on_failure=True,
             retries=0,
             retry_delay=timedelta(seconds=300),
             retry_exponential_backoff=False,
@@ -1846,8 +1866,10 @@ class BaseOperator(object):
         self.task_id = task_id
         self.owner = owner
         self.email = email
+        self.to = to
         self.email_on_retry = email_on_retry
         self.email_on_failure = email_on_failure
+        self.msg_on_failure = msg_on_failure
         self.start_date = start_date
         if start_date and not isinstance(start_date, datetime):
             logging.warning(
